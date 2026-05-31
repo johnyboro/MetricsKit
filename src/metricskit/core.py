@@ -23,6 +23,12 @@ class Metric(Protocol):
     def compute(self) -> float: ...
 
 
+class MultiMetric(Metric, Protocol):
+    """Protocol for metrics that export multiple scalar values."""
+
+    def compute_all(self) -> dict[str, float]: ...
+
+
 @dataclass(frozen=True)
 class MetricBatch:
     """Normalized view over one model batch for metric implementations."""
@@ -317,18 +323,16 @@ class Metrics:
 
     def get(self, name: str) -> float:
         """Get a single metric by name."""
-        if name not in self._metrics:
+        self._ensure_cache()
+        if name not in self._cache:
             raise ValueError(
                 f"Metric of name: {name} not supported, supported metrics: {self.supported_metrics}"
             )
-
-        if name not in self._cache:
-            self._cache[name] = self._metrics[name].compute()
-
         return self._cache[name]
 
     def get_all(self, names: MetricNames = None) -> dict[str, float]:
         """Compute selected metrics, or all configured metrics if names is None."""
+        self._ensure_cache()
         if names is None or names == "all":
             selected = self.supported_metrics
         else:
@@ -338,7 +342,8 @@ class Metrics:
     @property
     def supported_metrics(self) -> tuple[str, ...]:
         """List of supported metric names."""
-        return tuple(self._metrics.keys())
+        self._ensure_cache()
+        return tuple(self._cache.keys())
 
     def to_dict(
         self,
@@ -358,3 +363,19 @@ class Metrics:
 
     def _invalidate_cache(self) -> None:
         self._cache.clear()
+
+    def _ensure_cache(self) -> None:
+        if self._cache:
+            return
+
+        for metric in self._metrics.values():
+            for name, value in self._compute_metric_values(metric).items():
+                if name in self._cache:
+                    raise ValueError(f"Duplicate metric output name: {name}")
+                self._cache[name] = value
+
+    def _compute_metric_values(self, metric: Metric) -> dict[str, float]:
+        compute_all = getattr(metric, "compute_all", None)
+        if callable(compute_all):
+            return {name: float(value) for name, value in compute_all().items()}
+        return {metric.name: float(metric.compute())}

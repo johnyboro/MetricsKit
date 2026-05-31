@@ -153,6 +153,44 @@ class History:
         )
         return rows[-1] if rows else None
 
+    def to_log_dict(
+        self,
+        *,
+        phase: str | None = None,
+        epoch: int | None = None,
+        step: int | None = None,
+        metric: str | Iterable[str] | None = None,
+        prefix_by: Iterable[str] | None = ("phase",),
+        include_context: bool = False,
+        **dimensions: DimensionValue,
+    ) -> MetricRow:
+        row = self.latest(
+            phase=phase,
+            epoch=epoch,
+            step=step,
+            metric=metric,
+            **dimensions,
+        )
+        if row is None:
+            return {}
+
+        metric_names = self._metric_names_from_rows([row])
+        prefix_parts = self._log_prefix_parts(row, list(prefix_by or []))
+        result: MetricRow = {}
+
+        if include_context:
+            for name, value in row.items():
+                if name not in metric_names:
+                    result[name] = value
+
+        for name in metric_names:
+            if name not in row:
+                continue
+            key = "/".join([*prefix_parts, name]) if prefix_parts else name
+            result[key] = row[name]
+
+        return result
+
     def series(
         self,
         metric: str,
@@ -448,6 +486,20 @@ class History:
         if not isinstance(value, int | float):
             raise TypeError(f"Metric '{name}' must be numeric, got {type(value).__name__}.")
         return float(value)
+
+    def _log_prefix_parts(self, row: MetricRow, prefix_by: Iterable[str]) -> list[str]:
+        parts: list[str] = []
+        for name in prefix_by:
+            if name not in row:
+                raise ValueError(f"Cannot prefix log metrics by unknown key: {name}")
+            value = row[name]
+            if value is None:
+                raise ValueError(f"Cannot prefix log metrics by null key: {name}")
+            if name == "phase":
+                parts.append(str(value))
+            else:
+                parts.append(f"{name}_{value}")
+        return parts
 
     def _coerce_row_value(self, value: object) -> MetricValue | str | bool | None:
         if value is None or isinstance(value, str | int | float | bool):

@@ -1,5 +1,5 @@
 from metricskit.history import History
-from metricskit.core import Conversion, Metric, MetricBatch, Metrics
+from metricskit.core import Conversion, Metric, MetricBatch, Metrics, MultiMetric
 from metricskit.metrics import (
     AUROC,
     MAE,
@@ -34,6 +34,7 @@ __all__ = [
     "Metric",
     "MetricBatch",
     "Metrics",
+    "MultiMetric",
     "Precision",
     "PrecisionRecallFScore",
     "Recall",

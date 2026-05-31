@@ -29,6 +29,9 @@ accuracy_by_epoch = history.aggregate(
     metric="accuracy",
     group_by=["epoch"],
 )
+
+log_values = history.to_log_dict(phase="val", fold=1, prefix_by=["fold", "phase"])
+# {"fold_1/val/accuracy": 0.91, "fold_1/val/loss": 0.42}
 ```
 
 Adding another row with the same `phase`, `epoch`, `step`, and dimensions
@@ -55,4 +58,36 @@ mean_accuracy_by_epoch = history.aggregate(
     metric="accuracy",
     group_by=["epoch"],
 )
+```
+
+## Logger output
+
+`Metrics.to_dict()` returns a flat metric dictionary and includes metrics that
+export multiple values, such as `PrecisionRecallFScore`.
+
+```python
+from metricskit import Metrics, PrecisionRecallFScore
+
+metrics = Metrics([PrecisionRecallFScore()])
+
+# After update(...):
+metrics.to_dict(prefix="val")
+# {"val/precision": ..., "val/recall": ..., "val/f1_macro": ...}
+```
+
+`History.to_log_dict()` formats the latest matching row for loggers such as
+Weights & Biases. Prefixes can include arbitrary dimensions.
+
+```python
+history.add("val", metrics, epoch=epoch, fold=fold)
+
+wandb.log(
+    history.to_log_dict(
+        phase="val",
+        fold=fold,
+        prefix_by=["fold", "phase"],
+    ),
+    step=epoch,
+)
+# logs fold_1/val/precision, fold_1/val/recall, fold_1/val/f1_macro, ...
 ```
