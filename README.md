@@ -65,6 +65,13 @@ std_accuracy_by_epoch = history.aggregate(
     metric="accuracy",
     group_by=["epoch"],
 )
+
+summary = history.aggregate_dict(
+    ["mean", "std"],
+    phase="val",
+    group_by=["epoch", "metric"],
+)
+# {"val/epoch_0/accuracy_mean": ..., "val/epoch_0/accuracy_std": ...}
 ```
 
 ## Logger output
@@ -97,4 +104,27 @@ wandb.log(
     step=epoch,
 )
 # logs fold_1/val/precision, fold_1/val/recall, fold_1/val/f1_macro, ...
+```
+
+Use `aggregate_dict()` for summary logging. It accepts one aggregation or many
+aggregations and flattens grouped results into logger-friendly keys.
+
+```python
+wandb.log(
+    history.aggregate_dict(
+        ["mean", "std"],
+        phase="val",
+        group_by=["metric"],
+    )
+)
+# logs val/accuracy_mean, val/accuracy_std, val/loss_mean, val/loss_std, ...
+
+wandb.log(
+    history.aggregate_dict(
+        ["mean", "std"],
+        phase="val",
+        group_by=["fold", "metric"],
+    )
+)
+# logs val/fold_0/accuracy_mean, val/fold_0/accuracy_std, ...
 ```

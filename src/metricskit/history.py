@@ -4,7 +4,7 @@ import json
 import math
 import sqlite3
 from collections.abc import Iterable, Mapping
-from typing import Literal, TypeAlias
+from typing import Literal, TypeAlias, cast
 
 from metricskit.core import Metrics
 
@@ -296,6 +296,54 @@ class History:
             result.append(row)
         return result
 
+    def aggregate_dict(
+        self,
+        aggregation: Aggregation | Iterable[Aggregation],
+        *,
+        phase: str | None = None,
+        epoch: int | None = None,
+        step: int | None = None,
+        metric: str | Iterable[str] | None = None,
+        group_by: Iterable[str] | None = None,
+        prefix_by: Iterable[str] | None = ("phase",),
+        include_context: bool = False,
+        **dimensions: DimensionValue,
+    ) -> MetricRow:
+        groups = list(group_by or [])
+        prefixes = list(prefix_by or [])
+        aggregations = self._normalize_aggregations(aggregation)
+        context: MetricRow = {
+            "phase": phase,
+            "epoch": epoch,
+            "step": step,
+            **dimensions,
+        }
+        result: MetricRow = {}
+
+        for aggregation_name in aggregations:
+            aggregated = self.aggregate(
+                aggregation_name,
+                phase=phase,
+                epoch=epoch,
+                step=step,
+                metric=metric,
+                group_by=groups,
+                **dimensions,
+            )
+            result.update(
+                self._format_aggregate_result(
+                    aggregated,
+                    aggregation_name,
+                    metric=metric,
+                    groups=groups,
+                    prefixes=prefixes,
+                    context=context,
+                    include_context=include_context,
+                )
+            )
+
+        return result
+
     def _create_schema(self) -> None:
         with self._connection:
             self._connection.execute("""
@@ -487,6 +535,85 @@ class History:
             variance = sum((value - mean) ** 2 for value in values) / len(values)
             return math.sqrt(variance)
         raise ValueError(f"Unsupported aggregation: {aggregation}")
+
+    def _format_aggregate_result(
+        self,
+        aggregated: float | int | list[MetricRow] | None,
+        aggregation: Aggregation,
+        *,
+        metric: str | Iterable[str] | None,
+        groups: list[str],
+        prefixes: list[str],
+        context: MetricRow,
+        include_context: bool,
+    ) -> MetricRow:
+        if aggregated is None:
+            return {}
+
+        if isinstance(aggregated, int | float):
+            metric_name = self._scalar_aggregate_metric_name(metric)
+            parts = self._aggregate_prefix_parts(context, prefixes, groups=[])
+            key = "/".join([*parts, f"{metric_name}_{aggregation}"])
+            result: MetricRow = {key: aggregated}
+            if include_context:
+                result.update({name: value for name, value in context.items() if value is not None})
+            return result
+
+        result: MetricRow = {}
+        for row in aggregated:
+            if include_context:
+                for name, value in {**context, **row}.items():
+                    if name not in self._aggregate_metric_columns(row, groups):
+                        result[name] = value
+
+            parts = self._aggregate_prefix_parts(context | row, prefixes, groups=groups)
+            for metric_name in self._aggregate_metric_columns(row, groups):
+                value = row[metric_name]
+                key_metric_name = str(row["metric"]) if metric_name == "value" and "metric" in row else metric_name
+                key = "/".join([*parts, f"{key_metric_name}_{aggregation}"])
+                result[key] = value
+        return result
+
+    def _aggregate_prefix_parts(
+        self,
+        row: MetricRow,
+        prefixes: list[str],
+        *,
+        groups: list[str],
+    ) -> list[str]:
+        parts = self._log_prefix_parts(row, prefixes)
+        for group in groups:
+            if group == "metric" or group in prefixes:
+                continue
+            parts.extend(self._log_prefix_parts(row, [group]))
+        return parts
+
+    def _aggregate_metric_columns(self, row: MetricRow, groups: list[str]) -> list[str]:
+        context_names = {"phase", "epoch", "step", *groups}
+        return [name for name in row if name not in context_names]
+
+    def _scalar_aggregate_metric_name(
+        self,
+        metric: str | Iterable[str] | None,
+    ) -> str:
+        if isinstance(metric, str):
+            return metric
+        return "value"
+
+    def _normalize_aggregations(
+        self,
+        aggregation: Aggregation | Iterable[Aggregation],
+    ) -> list[Aggregation]:
+        aggregations = (
+            [cast(Aggregation, aggregation)]
+            if isinstance(aggregation, str)
+            else list(aggregation)
+        )
+        if not aggregations:
+            raise ValueError("At least one aggregation is required.")
+        for aggregation_name in aggregations:
+            self._validate_aggregation(aggregation_name)
+        return aggregations
 
     def _metric_float(self, row: MetricRow, name: str) -> float:
         value = row[name]
