@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from collections.abc import Iterable, Mapping
 from typing import Literal, TypeAlias
@@ -10,7 +11,9 @@ from metricskit.core import Metrics
 MetricValue: TypeAlias = float | int
 MetricRow: TypeAlias = dict[str, MetricValue | str | int | float | bool | None]
 DimensionValue: TypeAlias = str | int | float | bool | None
-Aggregation: TypeAlias = Literal["mean", "avg", "min", "max", "sum", "count", "last"]
+Aggregation: TypeAlias = Literal[
+    "mean", "avg", "min", "max", "sum", "count", "last", "std"
+]
 
 _RESERVED_DIMENSIONS = {
     "phase",
@@ -479,6 +482,10 @@ class History:
             return len(values)
         if aggregation == "last":
             return values[-1]
+        if aggregation == "std":
+            mean = sum(values) / len(values)
+            variance = sum((value - mean) ** 2 for value in values) / len(values)
+            return math.sqrt(variance)
         raise ValueError(f"Unsupported aggregation: {aggregation}")
 
     def _metric_float(self, row: MetricRow, name: str) -> float:
@@ -507,9 +514,18 @@ class History:
         raise TypeError(f"History row value must be scalar, got {type(value).__name__}.")
 
     def _validate_aggregation(self, aggregation: Aggregation) -> None:
-        if aggregation not in {"mean", "avg", "min", "max", "sum", "count", "last"}:
+        if aggregation not in {
+            "mean",
+            "avg",
+            "min",
+            "max",
+            "sum",
+            "count",
+            "last",
+            "std",
+        }:
             raise ValueError(
-                "Unsupported aggregation. Expected one of: mean, avg, min, max, sum, count, last."
+                "Unsupported aggregation. Expected one of: mean, avg, min, max, sum, count, last, std."
             )
 
     def _validate_dimensions(self, dimensions: Mapping[str, DimensionValue]) -> None:

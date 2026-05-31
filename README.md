@@ -58,6 +58,13 @@ mean_accuracy_by_epoch = history.aggregate(
     metric="accuracy",
     group_by=["epoch"],
 )
+
+std_accuracy_by_epoch = history.aggregate(
+    "std",
+    phase="val",
+    metric="accuracy",
+    group_by=["epoch"],
+)
 ```
 
 ## Logger output
