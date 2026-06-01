@@ -72,6 +72,20 @@ summary = history.aggregate_dict(
     group_by=["epoch", "metric"],
 )
 # {"val/epoch_0/accuracy_mean": ..., "val/epoch_0/accuracy_std": ...}
+
+best_rows = history.best_rows(
+    phase="val",
+    select_metric="accuracy",
+    select_mode="max",
+    group_by="fold",
+)
+
+best_summary = history.aggregate_rows_dict(
+    best_rows,
+    ["mean", "std"],
+    group_by="metric",
+    prefix_by=None,
+)
 ```
 
 ## Logger output
@@ -127,4 +141,30 @@ wandb.log(
     )
 )
 # logs val/fold_0/accuracy_mean, val/fold_0/accuracy_std, ...
+```
+
+For final training summaries, `aggregate_best_dict()` selects the best row per
+group first, then aggregates those selected rows. This is useful for reporting
+best validation performance across folds.
+
+```python
+latest_summary = history.aggregate_dict(
+    ["mean", "std"],
+    phase="val",
+    epoch=last_epoch,
+    group_by="metric",
+    prefix_by=None,
+)
+
+best_summary = history.aggregate_best_dict(
+    ["mean", "std"],
+    phase="val",
+    select_metric="accuracy",
+    select_mode="max",
+    group_by="fold",
+    aggregate_group_by="metric",
+    prefix_by=None,
+)
+
+summary = {"latest": latest_summary, "best": best_summary}
 ```

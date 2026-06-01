@@ -14,6 +14,7 @@ DimensionValue: TypeAlias = str | int | float | bool | None
 Aggregation: TypeAlias = Literal[
     "mean", "avg", "min", "max", "sum", "count", "last", "std"
 ]
+SelectMode: TypeAlias = Literal["min", "max"]
 
 _RESERVED_DIMENSIONS = {
     "phase",
@@ -178,7 +179,7 @@ class History:
             return {}
 
         metric_names = self._metric_names_from_rows([row])
-        prefix_parts = self._log_prefix_parts(row, list(prefix_by or []))
+        prefix_parts = self._log_prefix_parts(row, self._normalize_names(prefix_by))
         result: MetricRow = {}
 
         if include_context:
@@ -233,11 +234,9 @@ class History:
         epoch: int | None = None,
         step: int | None = None,
         metric: str | Iterable[str] | None = None,
-        group_by: Iterable[str] | None = None,
+        group_by: str | Iterable[str] | None = None,
         **dimensions: DimensionValue,
     ) -> float | int | list[MetricRow] | None:
-        self._validate_aggregation(aggregation)
-        groups = list(group_by or [])
         rows = self.rows(
             phase=phase,
             epoch=epoch,
@@ -245,6 +244,18 @@ class History:
             metric=metric,
             **dimensions,
         )
+        return self.aggregate_rows(rows, aggregation, group_by=group_by)
+
+    def aggregate_rows(
+        self,
+        rows: Iterable[MetricRow],
+        aggregation: Aggregation,
+        *,
+        group_by: str | Iterable[str] | None = None,
+    ) -> float | int | list[MetricRow] | None:
+        self._validate_aggregation(aggregation)
+        groups = self._normalize_names(group_by)
+        rows = list(rows)
         if not rows:
             return [] if groups else None
 
@@ -304,31 +315,57 @@ class History:
         epoch: int | None = None,
         step: int | None = None,
         metric: str | Iterable[str] | None = None,
-        group_by: Iterable[str] | None = None,
-        prefix_by: Iterable[str] | None = ("phase",),
+        group_by: str | Iterable[str] | None = None,
+        prefix_by: str | Iterable[str] | None = ("phase",),
         include_context: bool = False,
         **dimensions: DimensionValue,
     ) -> MetricRow:
-        groups = list(group_by or [])
-        prefixes = list(prefix_by or [])
-        aggregations = self._normalize_aggregations(aggregation)
         context: MetricRow = {
             "phase": phase,
             "epoch": epoch,
             "step": step,
             **dimensions,
         }
+        rows = self.rows(
+            phase=phase,
+            epoch=epoch,
+            step=step,
+            metric=metric,
+            **dimensions,
+        )
+        return self.aggregate_rows_dict(
+            rows,
+            aggregation,
+            metric=metric,
+            group_by=group_by,
+            prefix_by=prefix_by,
+            context=context,
+            include_context=include_context,
+        )
+
+    def aggregate_rows_dict(
+        self,
+        rows: Iterable[MetricRow],
+        aggregation: Aggregation | Iterable[Aggregation],
+        *,
+        metric: str | Iterable[str] | None = None,
+        group_by: str | Iterable[str] | None = None,
+        prefix_by: str | Iterable[str] | None = ("phase",),
+        context: Mapping[str, MetricValue | str | bool | None] | None = None,
+        include_context: bool = False,
+    ) -> MetricRow:
+        rows = list(rows)
+        groups = self._normalize_names(group_by)
+        prefixes = self._normalize_names(prefix_by)
+        aggregations = self._normalize_aggregations(aggregation)
+        context_row: MetricRow = dict(context or {})
         result: MetricRow = {}
 
         for aggregation_name in aggregations:
-            aggregated = self.aggregate(
+            aggregated = self.aggregate_rows(
+                rows,
                 aggregation_name,
-                phase=phase,
-                epoch=epoch,
-                step=step,
-                metric=metric,
                 group_by=groups,
-                **dimensions,
             )
             result.update(
                 self._format_aggregate_result(
@@ -337,12 +374,87 @@ class History:
                     metric=metric,
                     groups=groups,
                     prefixes=prefixes,
-                    context=context,
+                    context=context_row,
                     include_context=include_context,
                 )
             )
 
         return result
+
+    def best_rows(
+        self,
+        *,
+        phase: str | None = None,
+        epoch: int | None = None,
+        step: int | None = None,
+        select_metric: str,
+        select_mode: SelectMode,
+        group_by: str | Iterable[str] | None = None,
+        **dimensions: DimensionValue,
+    ) -> list[MetricRow]:
+        self._validate_select_mode(select_mode)
+        groups = self._normalize_names(group_by)
+        rows = self.rows(
+            phase=phase,
+            epoch=epoch,
+            step=step,
+            metric=None,
+            **dimensions,
+        )
+        selected: dict[tuple[MetricValue | str | bool | None, ...], MetricRow] = {}
+
+        for row in rows:
+            value = self._metric_float(row, select_metric)
+            key = tuple(row.get(group) for group in groups)
+            current = selected.get(key)
+            if current is None:
+                selected[key] = row
+                continue
+
+            current_value = self._metric_float(current, select_metric)
+            if self._is_better(value, current_value, select_mode):
+                selected[key] = row
+
+        return list(selected.values())
+
+    def aggregate_best_dict(
+        self,
+        aggregation: Aggregation | Iterable[Aggregation],
+        *,
+        phase: str | None = None,
+        epoch: int | None = None,
+        step: int | None = None,
+        select_metric: str,
+        select_mode: SelectMode,
+        group_by: str | Iterable[str] | None = None,
+        aggregate_group_by: str | Iterable[str] | None = "metric",
+        prefix_by: str | Iterable[str] | None = ("phase",),
+        include_context: bool = False,
+        **dimensions: DimensionValue,
+    ) -> MetricRow:
+        rows = self.best_rows(
+            phase=phase,
+            epoch=epoch,
+            step=step,
+            select_metric=select_metric,
+            select_mode=select_mode,
+            group_by=group_by,
+            **dimensions,
+        )
+        context: MetricRow = {
+            "phase": phase,
+            "epoch": epoch,
+            "step": step,
+            **dimensions,
+        }
+        return self.aggregate_rows_dict(
+            rows,
+            aggregation,
+            group_by=aggregate_group_by,
+            prefix_by=prefix_by,
+            context=context,
+            include_context=include_context,
+        )
 
     def _create_schema(self) -> None:
         with self._connection:
@@ -615,6 +727,23 @@ class History:
             self._validate_aggregation(aggregation_name)
         return aggregations
 
+    def _normalize_names(self, names: str | Iterable[str] | None) -> list[str]:
+        if names is None:
+            return []
+        if isinstance(names, str):
+            return [names]
+        return list(names)
+
+    def _is_better(
+        self,
+        value: float,
+        current_value: float,
+        select_mode: SelectMode,
+    ) -> bool:
+        if select_mode == "max":
+            return value >= current_value
+        return value <= current_value
+
     def _metric_float(self, row: MetricRow, name: str) -> float:
         value = row[name]
         if not isinstance(value, int | float):
@@ -654,6 +783,10 @@ class History:
             raise ValueError(
                 "Unsupported aggregation. Expected one of: mean, avg, min, max, sum, count, last, std."
             )
+
+    def _validate_select_mode(self, select_mode: SelectMode) -> None:
+        if select_mode not in {"min", "max"}:
+            raise ValueError("Unsupported select mode. Expected one of: min, max.")
 
     def _validate_dimensions(self, dimensions: Mapping[str, DimensionValue]) -> None:
         reserved = _RESERVED_DIMENSIONS.intersection(dimensions)
